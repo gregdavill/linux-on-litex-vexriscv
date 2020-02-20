@@ -119,8 +119,8 @@ def SoCLinux(soc_cls, **kwargs):
             
         def add_serial_cdc(self):
             import litex.soc.cores.clock as clk
-            import valentyusb.usbcore.io as usbio
-            import valentyusb.usbcore.cpu.cdc_eptri as cdc_eptri
+            import valentyusb.valentyusb.usbcore.io as usbio
+            import valentyusb.valentyusb.usbcore.cpu.cdc_eptri as cdc_eptri
 
             # Add extra clocks needed by the USB system
             self.clock_domains.cd_usb_12 = ClockDomain()
