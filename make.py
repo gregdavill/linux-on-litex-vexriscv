@@ -180,13 +180,95 @@ class ULX3S(Board):
 class HADBadge(Board):
     SPIFLASH_PAGE_SIZE    = 256
     SPIFLASH_SECTOR_SIZE  = 64*kB
-    SPIFLASH_DUMMY_CYCLES = 8
+    SPIFLASH_DUMMY_CYCLES = 6
+    FLASH_REGIONS = [
+        #"": "0x00000000", # FPGA bootloader image:  loaded at startup
+        #"build/hadbadge/gateware/ecp5_compress_qspi_38.8M.bit":
+        #                               "0x00180000", # FPGA user image 
+        ["buildroot/Image",        "KERNEL_IMAGE",       "0x00400000"], # Linux Image: copied to 0xc0000000 by bios
+        ["buildroot/rootfs.cpio",  "ROOTFS_IMAGE",       "0x00880000"], # File System: copied to 0xc0800000 by bios
+        ["buildroot/rv32.dtb",     "DEVICE_TREE_IMAGE",  "0x00f00000"], # Device tree: copied to 0xc1000000 by bios
+        ["emulator/emulator.bin",  "EMULATOR_IMAGE",     "0x00f01000"], # MM Emulator: copied to 0x20000000 by bios
+    ]
+
     def __init__(self):
         from litex_boards.targets import hadbadge
-        Board.__init__(self, hadbadge.BaseSoC, {"serial", "spiflash"})
+        #Board.__init__(self, hadbadge.BaseSoC, {"serial", "spiflash"})     
+        Board.__init__(self, hadbadge.BaseSoC, {"usb_cdc", "spiflash"})     
+
+    def flash(self):
+        import struct
+        import binascii
+
+        flash_regions_final = self.FLASH_REGIONS
+        flash_regions = {}
+
+        # hadbadge DFU lets you flash user data starting at address 0x00200000
+        # So we shift all offsets so they end up in the right place
+        offset = int("0x00200000", 16)
+        for filename, _, base in flash_regions_final:
+            base = int(base, 16)
+            new_address = base - offset
+            flash_regions[filename] = new_address
+
+
+        # Create binary with all 4 blocks. 
+        # Each block has the following format
+        #
+        # 0x0000    : <length of payload (bytes)>
+        # 0x0004    : <crc32 covering payload>
+        # 0x0008    : payload
+        # length + 8: last byte of payload
+        output_file = 'build/hadbadge/gateware/flash_image.bin'
+        total_len = 0
+        with open(output_file, "wb") as f:
+            for filename, base in flash_regions.items():
+                data = open(filename, "rb").read()
+                crc = binascii.crc32(data)
+                
+                data_write = bytearray()
+                data_write += struct.pack('<I', len(data)) # len
+                data_write += struct.pack('<I', crc) # CRC
+                data_write += data
+                # Print some stats, data is useful for checking vaild data loaded.
+                print(f' ')
+                print(f'Inserting: {filename:60}')
+                print(f'  Start address: 0x{base:08x}')
+                print(f'  Length       : 0x{len(data):08x} bytes')
+                print(f'  crc32        : 0x{crc:08x}')
+                print(f'           data: ' + f' '.join(f'{i:02x}' for i in data_write[:16]))
+                f.seek(base)
+                f.write(data_write)
+
+                total_len += len(data_write)
+
+        # Print some stats
+        remain = 16*1024*1024 - (
+            0x200000 + total_len)
+        print("-"*40)
+        print(("      Total Image Size: {:10} bytes"
+               " ({} Megabits, {:.2f} Megabytes)"
+               ).format(total_len, int(total_len*8/1024/1024), total_len/1024/1024))
+        print("-"*40)
+        print(("       Remaining space: {:10} bytes"
+               " ({} Megabits, {:.2f} Megabytes)"
+               ).format(remain, int(remain*8/1024/1024), remain/1024/1024))
+        total = 16*1024*1024 - (0x200000)
+        print(("           Total space: {:10} bytes"
+               " ({} Megabits, {:.2f} Megabytes)"
+               ).format(total, int(total*8/1024/1024), total/1024/1024))
+
+    # create a compress bitstream with faster SPI parameters. This speeds up loading.
+        build_name = 'build/hadbadge/gateware/top.config'
+        ecp5_bitstream = 'build/hadbadge/gateware/ecp5_bitstream.bit'
+        os.system(f'ecppack {build_name} --compress --spimode qspi --freq 38.8 --bit {ecp5_bitstream}')
+        
+        
+        os.system("dfu-util -d 1d50:614b --alt 2 --download build/hadbadge/gateware/ecp5_bitstream.bit")
+        os.system("dfu-util -d 1d50:614b --alt 4 --download build/hadbadge/gateware/flash_image.bin --reset")
 
     def load(self):
-        os.system("dfu-util --alt 2 --download build/hadbadge/gateware/top.bit --reset")
+        os.system("dfu-util -d 1d50:614b --alt 2 --download build/hadbadge/gateware/top.bit --reset")
 
 # OrangeCrab support -------------------------------------------------------------------------------
 
@@ -307,6 +389,9 @@ def main():
             soc.add_spi_flash(dummy_cycles=board.SPIFLASH_DUMMY_CYCLES)
             soc.add_constant("SPIFLASH_PAGE_SIZE", board.SPIFLASH_PAGE_SIZE)
             soc.add_constant("SPIFLASH_SECTOR_SIZE", board.SPIFLASH_SECTOR_SIZE)
+            if hasattr(board,'FLASH_REGIONS'):
+                for _, name, offset in board.FLASH_REGIONS:
+                    soc.add_constant(f'{name}_FLASH_OFFSET', int(offset,16))
         if "ethernet" in board.soc_capabilities:
             soc.configure_ethernet(local_ip=args.local_ip, remote_ip=args.remote_ip)
         if "leds" in board.soc_capabilities:
@@ -329,6 +414,8 @@ def main():
             soc.add_icap_bitstream()
         if "mmcm" in board.soc_capabilities:
             soc.add_mmcm()
+        if "usb_cdc" in board.soc_capabilities:
+            soc.add_serial_cdc()
         soc.configure_boot()
 
         build_dir = os.path.join("build", board_name)

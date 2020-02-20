@@ -95,6 +95,7 @@ def SoCLinux(soc_cls, **kwargs):
                 cpu_type       = "vexriscv",
                 cpu_variant    = cpu_variant,
                 uart_baudrate  = uart_baudrate,
+                #with_uart      = False,
                 max_sdram_size = 0x10000000, # Limit mapped SDRAM to 256MB for now
                 **kwargs)
 
@@ -115,6 +116,27 @@ def SoCLinux(soc_cls, **kwargs):
             self.add_memory_region("spiflash", self.mem_map["spiflash"], 0x1000000)
             self.add_wb_slave(self.mem_map["spiflash"], self.spiflash.bus)
             self.add_csr("spiflash")
+            
+        def add_serial_cdc(self):
+            import litex.soc.cores.clock as clk
+            import valentyusb.usbcore.io as usbio
+            import valentyusb.usbcore.cpu.cdc_eptri as cdc_eptri
+
+            # Add extra clocks needed by the USB system
+            self.clock_domains.cd_usb_12 = ClockDomain()
+            self.clock_domains.cd_usb_48 = ClockDomain()
+        
+            # Note this pll is actually driven by the main sys_clk PLL
+            # It should probably be run from clk8, but it's difficult to ge access to that pin.
+            self.submodules.usb_pll = usb_pll = clk.ECP5PLL()
+            usb_pll.register_clkin(ClockSignal(), 48e6)
+            usb_pll.create_clkout(self.cd_usb_48, 48e6)
+            usb_pll.create_clkout(self.cd_usb_12, 12e6)
+
+            # Replace standard Serial with our USB CDC one
+            usb_pads = self.platform.request("usb")
+            usb_iobuf = usbio.IoBuf(usb_pads.d_p, usb_pads.d_n, usb_pads.pullup)
+            self.submodules.uart = cdc_eptri.CDCUsb(usb_iobuf)
 
         def add_leds(self):
             self.submodules.leds = GPIOOut(Cat(platform_request_all(self.platform, "user_led")))
@@ -216,9 +238,9 @@ def SoCLinux(soc_cls, **kwargs):
             self.add_constant("REMOTEIP3", int(remote_ip[2]))
             self.add_constant("REMOTEIP4", int(remote_ip[3]))
 
-        def configure_boot(self):
+        def configure_boot(self, boot_offset = 0):
             if hasattr(self, "spiflash"):
-                self.add_constant("FLASH_BOOT_ADDRESS", self.mem_map["spiflash"])
+                self.add_constant("FLASH_BOOT_ADDRESS", self.mem_map["spiflash"] + boot_offset)
 
         def generate_dts(self, board_name):
             json = os.path.join("build", board_name, "csr.json")
