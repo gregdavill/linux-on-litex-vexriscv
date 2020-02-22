@@ -7,6 +7,8 @@ from migen import *
 
 from litex.soc.interconnect import wishbone
 
+from litex.soc.interconnect.stream import SyncFIFO
+
 from litex.soc.cores.spi_flash import SpiFlash
 from litex.soc.cores.gpio import GPIOOut, GPIOIn
 from litex.soc.cores.spi import SPIMaster
@@ -54,6 +56,7 @@ video_resolutions = {
         "v-sync"         : 3,
         "v-front-porch"  : 1,
     }
+
 }
 
 # Helpers ------------------------------------------------------------------------------------------
@@ -133,7 +136,10 @@ def SoCLinux(soc_cls, **kwargs):
             usb_pll.create_clkout(self.cd_usb_48, 48e6)
             usb_pll.create_clkout(self.cd_usb_12, 12e6)
 
-            # Replace standard Serial with our USB CDC one
+            # Remove Serial UART
+            self.uart = None
+
+            # Replace it with our USB CDC one
             usb_pads = self.platform.request("usb")
             usb_iobuf = usbio.IoBuf(usb_pads.d_p, usb_pads.d_n, usb_pads.pullup)
             self.submodules.uart = cdc_eptri.CDCUsb(usb_iobuf)
@@ -166,28 +172,75 @@ def SoCLinux(soc_cls, **kwargs):
             self.add_csr("xadc")
 
         def add_framebuffer(self, video_settings):
+            import litex.soc.cores.clock as clk
             platform = self.platform
-            assert platform.device[:4] == "xc7a"
-            dram_port = self.sdram.crossbar.get_port(
-                mode="read",
-                data_width=32,
-                clock_domain="pix",
-                reverse=True)
-            framebuffer = VideoOut(
-                device=platform.device,
-                pads=platform.request("hdmi_out"),
-                dram_port=dram_port)
-            self.submodules.framebuffer = framebuffer
-            self.add_csr("framebuffer")
+            
+            #vid = Record([
+            #    ('hsync_n',1),
+            #    ('vsync_n',1),
+            #    ('r',8),
+            #    ('b',8),
+            #    ('g',8),
+            #    ('psave_n',1),
+            #    ('en',1),
+            #    ('de',1)
+            #])
+            #
+            ##assert platform.device[:4] == "xc7a"
+            #dram_port = self.sdram.crossbar.get_port(
+            #    mode="read",
+            #    data_width=32,
+            #    clock_domain="pix",
+            #    reverse=True)
+            #framebuffer = VideoOut(
+            #    device=platform.device,
+            #    pads=vid,
+            #    dram_port=dram_port)
+            #self.submodules.framebuffer = framebuffer
+            #self.add_csr("framebuffer")
+            #
+            # Add extra clocks needed by the USB system
+            self.clock_domains.cd_pix = ClockDomain()
+            self.clock_domains.cd_lcd = ClockDomain()
+            
+            # Note this pll is actually driven by the main sys_clk PLL
+            # It should probably be run from clk8, but it's difficult to ge access to that pin.
+            self.submodules.pix_pll = pix_pll = clk.ECP5PLL()
+            pix_pll.register_clkin(ClockSignal(), 48e6)
+            pix_pll.create_clkout(self.cd_pix, 48e6)
 
-            framebuffer.driver.clocking.cd_pix.clk.attr.add("keep")
-            framebuffer.driver.clocking.cd_pix5x.clk.attr.add("keep")
-            platform.add_period_constraint(framebuffer.driver.clocking.cd_pix.clk, 1e9/video_settings["pix_clk"])
-            platform.add_period_constraint(framebuffer.driver.clocking.cd_pix5x.clk, 1e9/(5*video_settings["pix_clk"]))
-            platform.add_false_path_constraints(
-                self.crg.cd_sys.clk,
-                framebuffer.driver.clocking.cd_pix.clk,
-                framebuffer.driver.clocking.cd_pix5x.clk)
+            # For now "Framebuffer" is just a serial terminal rendered on the display
+
+            import lcd as hadlcd
+            import gen as hadgen
+            from litevideo.terminal.core import Terminal    
+            import uartstream
+            from dma import StreamReader, StreamWriter
+            import stream_gen
+
+            self.submodules.lcd = lcd = ClockDomainsRenamer('pix')(hadlcd.LCD(platform.request("lcd")))
+            self.submodules.hadgen = gen = ClockDomainsRenamer('pix')(hadgen.Generator())
+            self.submodules.terminal = terminal = ClockDomainsRenamer({'sys':'pix','vga':'pix'})(Terminal())
+
+            self.submodules.uart = uart = uartstream.UARTStream()
+
+            buttons = platform.request('keypad')
+            self.submodules.btn = btn = stream_gen.StreamGenerator(buttons.up)
+
+            # Connect VGA pins
+            self.comb += [
+                lcd.vsync.eq(~terminal.vsync),
+                lcd.hsync.eq(~terminal.hsync),
+                lcd.r.eq(terminal.red),
+                lcd.g.eq(terminal.green),
+                lcd.b.eq(terminal.blue),
+
+                gen.bus.connect(terminal.bus),
+                uart.source.connect(gen.sink),
+                btn.source.connect(uart.sink)
+            ]
+
+
 
             self.add_constant("litevideo_pix_clk", video_settings["pix_clk"])
             self.add_constant("litevideo_h_active", video_settings["h-active"])

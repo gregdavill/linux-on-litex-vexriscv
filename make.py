@@ -186,7 +186,7 @@ class HADBadge(Board):
         #"build/hadbadge/gateware/ecp5_compress_qspi_38.8M.bit":
         #                               "0x00180000", # FPGA user image 
         ["buildroot/Image",        "KERNEL_IMAGE",       "0x00400000"], # Linux Image: copied to 0xc0000000 by bios
-        ["buildroot/rootfs.cpio",  "ROOTFS_IMAGE",       "0x00880000"], # File System: copied to 0xc0800000 by bios
+        ["buildroot/rootfs.cpio",  "ROOTFS_IMAGE",       "0x00900000"], # File System: copied to 0xc0800000 by bios
         ["buildroot/rv32.dtb",     "DEVICE_TREE_IMAGE",  "0x00f00000"], # Device tree: copied to 0xc1000000 by bios
         ["emulator/emulator.bin",  "EMULATOR_IMAGE",     "0x00f01000"], # MM Emulator: copied to 0x20000000 by bios
     ]
@@ -194,7 +194,8 @@ class HADBadge(Board):
     def __init__(self):
         from litex_boards.targets import hadbadge
         #Board.__init__(self, hadbadge.BaseSoC, {"serial", "spiflash"})     
-        Board.__init__(self, hadbadge.BaseSoC, {"usb_cdc", "spiflash"})     
+        #Board.__init__(self, hadbadge.BaseSoC, {"usb_cdc", "spiflash", "framebuffer"})     
+        Board.__init__(self, hadbadge.BaseSoC, { "spiflash", "framebuffer"})     
 
     def flash(self):
         import struct
