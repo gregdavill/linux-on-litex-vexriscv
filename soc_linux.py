@@ -102,6 +102,7 @@ def SoCLinux(soc_cls, **kwargs):
             self.add_memory_region("emulator", self.mem_map["main_ram"] + 0x01100000, 0x4000,
                 type="cached+linker")
 
+
         # Leds -------------------------------------------------------------------------------------
         def add_leds(self):
             self.submodules.leds = GPIOOut(Cat(platform_request_all(self.platform, "user_led")))

@@ -220,13 +220,12 @@ class OrangeCrab(Board):
         if uart_name == "usb_cdc": # FIXME: do proper install of ValentyUSB.
             os.system("git clone https://github.com/gregdavill/valentyusb -b hw_cdc_eptri")
             sys.path.append("valentyusb")
-            Board.__init__(self, orangecrab.BaseSoC, {"usb_cdc", "spisdcard"})
+            Board.__init__(self, orangecrab.BaseSoC, {"usb_cdc", "spisdcard", "rgb_led"})
         else:
             Board.__init__(self, orangecrab.BaseSoC, {"serial", "spisdcard"})
 
     def load(self):
-        os.system("openocd -f openocd/ecp5-versa5g.cfg -c \"transport select jtag; init;" +
-            " svf build/gateware/top.svf; exit\"")
+        os.system("dfu-util -d 1209:5bf0 --download build/orangecrab/gateware/top.bit")
 
 # Cam Link 4K support ------------------------------------------------------------------------------
 
@@ -381,6 +380,10 @@ def main():
         if "mmcm" in board.soc_capabilities:
             soc.add_mmcm()
         soc.configure_boot()
+
+        if "usb_cdc" in board.soc_capabilities:
+            soc.platform.toolchain.build_template += ["ecppack top.config --compress --spimode qspi --freq 38.8 --bit top.bit"]
+            soc.platform.toolchain.build_template[1] += "--pre-place ../../../valentyusb/pre_place_25k.py --seed 1"
 
         # Build ------------------------------------------------------------------------------------
         build_dir = os.path.join("build", board_name)
